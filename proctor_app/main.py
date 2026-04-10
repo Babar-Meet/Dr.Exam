@@ -4,44 +4,25 @@ import argparse
 import time
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Deque, Dict, List, Optional, Set
+from typing import Deque, List, Optional, Set
 from urllib.parse import unquote, urlparse
 
 import cv2
 
 from proctor_app.config import AppConfig, CameraSettings, DeviceRules, URLRules, ViewSettings, build_default_config
 from proctor_app.core.evidence_store import EvidenceStore
+from proctor_app.core.focus_state import FocusStateResolver, friendly_process_name
 from proctor_app.core.models import ViolationSignal, ViolationType
+from proctor_app.core.state_transition_logger import StateTransitionLogger
 from proctor_app.core.violation_manager import ViolationManager
 from proctor_app.detectors.device_monitor import DeviceMonitor
 from proctor_app.detectors.face_monitor import FaceMonitor
 from proctor_app.detectors.screen_monitor import ScreenActivityMonitor, ScreenAssessment
 from proctor_app.detectors.url_monitor import URLMonitor, URLAssessment
-from proctor_app.io.browser_url import get_active_chrome_context, get_foreground_process_name, get_window_title
 from proctor_app.io.camera_stream import CameraStream
+from proctor_app.io.focus_context import FocusContext, collect_focus_context
 from proctor_app.io.screen_stream import ScreenStream
 from proctor_app.ui.renderer import configure_preview_window, draw_device_boxes, draw_status_overlay
-
-
-BROWSER_PROCESSES = {"chrome", "msedge", "firefox", "brave", "opera"}
-
-
-def _friendly_process_name(process_name: str) -> str:
-    mapping = {
-        "explorer": "File Explorer",
-        "powershell": "PowerShell",
-        "pwsh": "PowerShell",
-        "cmd": "Command Prompt",
-        "calculator": "Calculator",
-        "calc": "Calculator",
-        "chrome": "Chrome",
-        "msedge": "Edge",
-        "firefox": "Firefox",
-        "brave": "Brave",
-        "opera": "Opera",
-    }
-    key = (process_name or "").strip().lower()
-    return mapping.get(key, process_name or "Unknown")
 
 
 def _infer_tab_name(window_title: str, active_url: str) -> str:
@@ -99,47 +80,6 @@ def _infer_tab_name(window_title: str, active_url: str) -> str:
             pass
 
     return "Browser Tab"
-
-
-def _correct_process_by_window_title(process_name: str, window_title: str) -> str:
-    title_lower = (window_title or "").lower()
-    name = (process_name or "").strip().lower()
-
-    if " - google chrome" in title_lower:
-        return "chrome"
-    if " - microsoft edge" in title_lower:
-        return "msedge"
-    if " - mozilla firefox" in title_lower:
-        return "firefox"
-    if " - brave" in title_lower:
-        return "brave"
-    if " - opera" in title_lower:
-        return "opera"
-
-    return name
-
-
-def _collect_focus_context() -> Dict[str, object]:
-    foreground_process = (get_foreground_process_name() or "").strip().lower()
-    foreground_title = (get_window_title() or "").strip()
-    foreground_process = _correct_process_by_window_title(foreground_process, foreground_title)
-    browser_foreground = foreground_process in BROWSER_PROCESSES
-
-    active_url = ""
-    browser_url_readable = False
-
-    if browser_foreground:
-        if foreground_process == "chrome":
-            _, active_url = get_active_chrome_context()
-        browser_url_readable = bool(active_url)
-
-    return {
-        "foreground_process": foreground_process,
-        "foreground_title": foreground_title,
-        "browser_foreground": browser_foreground,
-        "active_url": active_url,
-        "browser_url_readable": browser_url_readable,
-    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -229,6 +169,13 @@ def run(config: AppConfig, monitor_index: int) -> None:
     )
 
     evidence = EvidenceStore(config.evidence_dir)
+    focus_state_resolver = FocusStateResolver()
+    state_transition_logger: Optional[StateTransitionLogger] = None
+    try:
+        state_transition_logger = StateTransitionLogger()
+        print(f"[INFO] State transition log: {state_transition_logger.log_path}")
+    except Exception as exc:
+        print(f"[WARN] State transition logger disabled: {exc}")
 
     latest_screen_frame = None
     screen_assessment = ScreenAssessment()
@@ -236,14 +183,15 @@ def run(config: AppConfig, monitor_index: int) -> None:
 
     url_assessment = URLAssessment()
     url_enabled = config.url.enabled
-    last_url_check_at = 0.0
+    focus_sample_interval_seconds = 1.0
+    last_focus_check_at = 0.0
     browser_foreground = False
     browser_url_readable = False
     active_url: str = ""
     foreground_process = ""
     foreground_title = ""
     focus_executor = ThreadPoolExecutor(max_workers=1)
-    focus_future: Optional[Future] = None
+    focus_future: Optional[Future[FocusContext]] = None
     app_switch_started_at = None
     browser_url_missing_started_at = None
 
@@ -306,24 +254,34 @@ def run(config: AppConfig, monitor_index: int) -> None:
                 try:
                     context = focus_future.result()
                 except Exception:
-                    context = {}
+                    context = FocusContext()
 
-                foreground_process = str(context.get("foreground_process", "") or "")
-                foreground_title = str(context.get("foreground_title", "") or "")
-                browser_foreground = bool(context.get("browser_foreground", False))
-                active_url = str(context.get("active_url", "") or "")
-                browser_url_readable = bool(context.get("browser_url_readable", False))
+                foreground_process = context.foreground_process
+                foreground_title = context.foreground_title
+                browser_foreground = context.browser_foreground
+                active_url = context.active_url
+                browser_url_readable = context.browser_url_readable
 
                 if url_enabled and url_monitor and browser_foreground and browser_url_readable:
                     url_assessment = url_monitor.analyze(active_url, now)
                 else:
                     url_assessment = URLAssessment()
 
+                if state_transition_logger is not None:
+                    current_focus_state = focus_state_resolver.resolve(
+                        process_name=foreground_process,
+                        window_title=foreground_title,
+                        browser_foreground=browser_foreground,
+                        browser_url_readable=browser_url_readable,
+                        active_url=active_url,
+                    )
+                    state_transition_logger.observe(current_focus_state, now)
+
                 focus_future = None
 
-            if focus_future is None and (now - last_url_check_at) >= config.url.check_interval_seconds:
-                focus_future = focus_executor.submit(_collect_focus_context)
-                last_url_check_at = now
+            if focus_future is None and (now - last_focus_check_at) >= focus_sample_interval_seconds:
+                focus_future = focus_executor.submit(collect_focus_context)
+                last_focus_check_at = now
 
             if browser_foreground and not browser_url_readable:
                 if browser_url_missing_started_at is None:
@@ -350,19 +308,19 @@ def run(config: AppConfig, monitor_index: int) -> None:
 
             if app_focus_switch_active:
                 switch_message = (
-                    f"Action: Opened app '{_friendly_process_name(foreground_process)}' | "
+                    f"Action: Opened app '{friendly_process_name(foreground_process)}' | "
                     "Result: Blocked (only browser allowed)"
                 )
             elif url_switch_active:
                 tab_name = _infer_tab_name(foreground_title, active_url)
-                browser_name = _friendly_process_name(foreground_process)
+                browser_name = friendly_process_name(foreground_process)
                 switch_message = (
                     f"Action: Opened tab '{tab_name}' in {browser_name} | "
                     f"Result: Blocked URL ({active_url[:120]})"
                 )
             elif browser_url_missing_active:
                 tab_name = _infer_tab_name(foreground_title, active_url)
-                browser_name = _friendly_process_name(foreground_process)
+                browser_name = friendly_process_name(foreground_process)
                 switch_message = (
                     f"Action: Opened tab '{tab_name}' in {browser_name} | "
                     "Result: Blocked (URL unreadable)"
@@ -461,6 +419,8 @@ def run(config: AppConfig, monitor_index: int) -> None:
                 break
     finally:
         focus_executor.shutdown(wait=False)
+        if state_transition_logger is not None:
+            state_transition_logger.close()
         evidence.close()
         face_monitor.close()
         camera.release()
