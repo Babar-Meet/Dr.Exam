@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Darshan Exam Portal - Test</title>
+    <style>
+        body { font-family: Arial; padding: 20px; }
+        h1 { color: #2c3e50; }
+        .question { margin-bottom: 15px; padding: 10px; border: 1px solid #ccc; border-radius: 5px; }
+        button { padding: 10px 20px; font-size: 16px; }
+        #result { margin-top: 20px; font-size: 20px; color: green; }
+    </style>
+</head>
+<body>
+
+<h1>Darshan Exam Portal - Mock Test</h1>
+
+<p><strong>Subject:</strong> Computer Science</p>
+<p><strong>Questions:</strong> 30 MCQ</p>
+
+<form id="quizForm"></form>
+
+<button onclick="submitQuiz()">Submit</button>
+
+<div id="result"></div>
+
+<script>
+const questions = [
+{q:"What is CPU?", o:["Central Process Unit","Central Processing Unit","Computer Personal Unit","Control Processing Unit"], a:1},
+{q:"HTML stands for?", o:["Hyper Text Markup Language","High Text Machine Language","Hyper Tabular Markup Language","None"], a:0},
+{q:"Which is input device?", o:["Monitor","Keyboard","Printer","Speaker"], a:1},
+{q:"Which is output device?", o:["Mouse","Keyboard","Monitor","Scanner"], a:2},
+{q:"1 Byte = ?", o:["4 bits","8 bits","16 bits","32 bits"], a:1},
+{q:"OS stands for?", o:["Open System","Operating System","Order System","None"], a:1},
+{q:"Which is programming language?", o:["HTML","CSS","Java","HTTP"], a:2},
+{q:"Which is browser?", o:["Windows","Linux","Chrome","DOS"], a:2},
+{q:"RAM is?", o:["Permanent","Temporary","External","None"], a:1},
+{q:"ROM is?", o:["Temporary","Permanent","Cache","None"], a:1},
+
+{q:"Which is storage device?", o:["Keyboard","Hard Disk","Mouse","Monitor"], a:1},
+{q:"Binary numbers use?", o:["0-9","0-1","A-Z","None"], a:1},
+{q:"URL means?", o:["Uniform Resource Locator","Universal Resource Link","Unique Resource Locator","None"], a:0},
+{q:"Which is DBMS?", o:["MySQL","HTML","CSS","HTTP"], a:0},
+{q:"Which is OS?", o:["Windows","Chrome","Google","Intel"], a:0},
+{q:"Which is not language?", o:["Python","Java","HTML","CPU"], a:3},
+{q:"Which is frontend?", o:["HTML","Node","Python","C"], a:0},
+{q:"Which is backend?", o:["HTML","CSS","Node","UI"], a:2},
+{q:"Which is network?", o:["LAN","CPU","RAM","ROM"], a:0},
+{q:"Which is protocol?", o:["HTTP","CPU","RAM","Mouse"], a:0},
+
+{q:"Which is cloud?", o:["AWS","CPU","RAM","Mouse"], a:0},
+{q:"Which is version control?", o:["Git","CPU","RAM","HTML"], a:0},
+{q:"Which is IDE?", o:["VS Code","CPU","RAM","Mouse"], a:0},
+{q:"Which is compiler?", o:["GCC","HTML","CSS","HTTP"], a:0},
+{q:"Which is database?", o:["MongoDB","HTML","CSS","HTTP"], a:0},
+{q:"Which is framework?", o:["React","CPU","RAM","Mouse"], a:0},
+{q:"Which is API?", o:["Application Programming Interface","CPU","RAM","Mouse"], a:0},
+{q:"Which is AI?", o:["Artificial Intelligence","CPU","RAM","Mouse"], a:0},
+{q:"Which is ML?", o:["Machine Learning","CPU","RAM","Mouse"], a:0},
+{q:"Which is OS kernel?", o:["Core part of OS","App","Browser","None"], a:0}
+];
+
+const form = document.getElementById("quizForm");
+
+questions.forEach((q, i) => {
+    let div = document.createElement("div");
+    div.className = "question";
+
+    let html = `<p>${i+1}. ${q.q}</p>`;
+    q.o.forEach((opt, j) => {
+        html += `<label><input type="radio" name="q${i}" value="${j}"> ${opt}</label><br>`;
+    });
+
+    div.innerHTML = html;
+    form.appendChild(div);
+});
+
+function submitQuiz(){
+    let score = 0;
+
+    questions.forEach((q, i) => {
+        let ans = document.querySelector(`input[name="q${i}"]:checked`);
+        if(ans && parseInt(ans.value) === q.a){
+            score++;
+        }
+    });
+
+    document.getElementById("result").innerText = "Your Score: " + score + " / 30";
+}
+</script>
+
+</body>
+</html>
